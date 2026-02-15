@@ -1,0 +1,115 @@
+GOVERNMENT SOCIAL SUPPORT PROGRAM - ELIGIBILITY POLICY DOCUMENT
+================================================================
+
+1. PROGRAM OVERVIEW
+The Social Support Program provides financial assistance and economic enablement services
+to residents who demonstrate genuine need for support. The program aims to help individuals
+and families achieve financial stability and self-sufficiency.
+
+2. ELIGIBILITY CRITERIA
+
+2.1 Income Assessment
+- Monthly household income below AED 10,000 per month: HIGH PRIORITY
+- Monthly household income between AED 10,000 - 20,000: MEDIUM PRIORITY
+- Monthly household income above AED 20,000: LOW PRIORITY
+- Per capita income (household income / family size) below AED 2,000: CRITICAL NEED
+- Per capita income between AED 2,000 - 5,000: HIGH NEED
+- Applicants with zero declared income require additional verification
+
+2.2 Employment Status
+- Unemployed individuals actively seeking work: HIGHEST PRIORITY
+- Part-time employed individuals: HIGH PRIORITY
+- Self-employed with inconsistent income: MEDIUM PRIORITY
+- Fully employed individuals: assessed based on income adequacy only
+- Employment history gaps exceeding 6 months warrant additional review
+
+2.3 Family Size and Dependents
+- Families with 5+ members: additional weight in assessment
+- Single parents with dependents: HIGH PRIORITY
+- Families with elderly dependents (65+): additional consideration
+- Families with disabled dependents: additional consideration
+- Number of school-age children affects support calculation
+
+2.4 Wealth Assessment
+- Net worth (assets minus liabilities) below AED 10,000: HIGH NEED
+- Net worth between AED 10,000 - 50,000: MEDIUM NEED
+- Net worth above AED 200,000: generally NOT eligible unless exceptional circumstances
+- Debt-to-income ratio above 50%: indicates financial stress
+- Assets primarily in illiquid form (property): may still qualify
+
+2.5 Demographic Profile
+- Age 18-25 (young adults entering workforce): eligible for training programs
+- Age 55+ (approaching retirement): eligible for transitional support
+- Recently divorced or widowed: eligible for emergency support
+- New residents (less than 2 years): limited eligibility, case-by-case review
+
+3. DECISION FRAMEWORK
+
+3.1 Approval Criteria
+An application is RECOMMENDED FOR APPROVAL when:
+- Overall eligibility score is 55 or above (out of 100)
+- At least 2 of 5 component scores are above 70
+- No disqualifying factors are present (fraud indicators, false information)
+- Income verification is consistent with declared information
+
+3.2 Soft Decline Criteria
+An application is RECOMMENDED FOR SOFT DECLINE when:
+- Overall eligibility score is below 55
+- Income and assets suggest financial self-sufficiency
+- No immediate financial need is demonstrated
+- Applicant may be redirected to economic enablement programs
+
+3.3 Score Weighting
+- Income Score: 30% weight
+- Employment Score: 25% weight
+- Wealth Score: 20% weight
+- Family Score: 15% weight
+- Demographic Score: 10% weight
+
+4. ECONOMIC ENABLEMENT PROGRAMS
+
+4.1 Upskilling Programs
+- Digital literacy courses for job seekers
+- Professional certification programs
+- Language training (Arabic/English proficiency)
+- Financial literacy workshops
+
+4.2 Training Programs
+- Vocational training in high-demand sectors
+- Entrepreneurship development programs
+- Sector-specific technical training
+- Soft skills development workshops
+
+4.3 Job Matching Services
+- Resume building and career counseling
+- Direct employer placement programs
+- Government sector employment initiatives
+- Private sector partnership placements
+
+4.4 Career Counseling
+- One-on-one career assessment sessions
+- Industry transition guidance
+- Skills gap analysis and development planning
+- Long-term career pathway development
+
+5. SUPPORT TIERS
+
+Tier 1 - Emergency Support (Score 80+):
+- Immediate financial assistance
+- Priority housing support
+- Full access to all enablement programs
+
+Tier 2 - Standard Support (Score 55-79):
+- Monthly financial assistance
+- Access to training and upskilling programs
+- Job matching services
+
+Tier 3 - Enablement Only (Score 40-54):
+- No direct financial assistance
+- Full access to economic enablement programs
+- Career counseling and job matching
+
+Tier 4 - Self-Sufficient (Score below 40):
+- Not eligible for financial support
+- May access public enablement resources
+- Redirected to community programs

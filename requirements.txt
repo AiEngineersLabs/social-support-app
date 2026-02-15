@@ -1,0 +1,44 @@
+# API & Server
+fastapi==0.115.6
+uvicorn==0.34.0
+python-multipart==0.0.20
+
+# Database
+sqlalchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.0
+
+# Data Processing
+pandas==2.2.3
+openpyxl==3.1.5
+Pillow==11.1.0
+
+# ML
+scikit-learn==1.6.1
+joblib==1.4.2
+numpy==2.2.1
+
+# LLM & Agents
+langchain==0.3.14
+langchain-community==0.3.14
+langchain-ollama==0.2.3
+langgraph==0.2.62
+
+# RAG
+llama-index==0.12.5
+llama-index-vector-stores-chroma==0.4.1
+llama-index-embeddings-ollama==0.5.0
+llama-index-llms-ollama==0.5.0
+chromadb==0.6.3
+
+# Observability
+langfuse==2.59.4
+
+# Frontend
+streamlit==1.41.1
+
+# Utilities
+python-dotenv==1.0.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+httpx==0.28.1

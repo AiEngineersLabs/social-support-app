@@ -1,0 +1,47 @@
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Data (runtime generated)
+data/uploads/
+data/chroma_db/
+data/synthetic/
+data/eligibility_model.pkl
+
+# ML model artifacts
+*.pkl
+*.joblib
+
+# Logs
+*.log
+nohup.out
+
+# Streamlit
+.streamlit/
+
+# Byte-compiled
+*.pyc
+
+# OS files
+Thumbs.db
