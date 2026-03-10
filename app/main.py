@@ -2,7 +2,9 @@
 FastAPI Backend for Social Support Application Workflow Automation
 """
 import os
+import re
 import json
+import logging
 import shutil
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
@@ -12,11 +14,79 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db, init_db
 from app.models import Applicant, Document, Decision
-from app.schemas import ApplicantCreate, ApplicantResponse, DecisionResponse, ChatRequest, ChatResponse
+from app.schemas import (
+    ApplicantCreate, ApplicantResponse, DecisionResponse,
+    ChatRequest, ChatResponse, ChatIntakeRequest, ChatIntakeResponse,
+)
 from app.agents.orchestrator import run_application_workflow, handle_chat_message
 from app.services.ml_classifier import train_model, load_model
 from app.services.vector_store import ingest_policy_documents, init_vector_store
 from app.utils.synthetic_data import generate_training_data
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Field type metadata for deterministic fallback extraction
+# ---------------------------------------------------------------------------
+INT_FIELDS = {"age", "family_size", "dependents"}
+FLOAT_FIELDS = {"monthly_income", "total_assets", "total_liabilities", "years_of_experience"}
+ENUM_FIELDS = {
+    "gender": ["Male", "Female"],
+    "marital_status": ["Single", "Married", "Divorced", "Widowed"],
+    "education_level": ["None", "Primary", "High School", "Diploma", "Bachelor", "Master", "PhD"],
+    "employment_status": ["Employed", "Unemployed", "Part-Time", "Self-Employed"],
+}
+STRING_FIELDS = {"full_name", "nationality"}
+EMIRATES_ID_PATTERN = re.compile(r"784-\d{4}-\d{7}-\d")
+
+
+def _coerce_field_types(extracted: dict) -> dict:
+    """Coerce string representations to correct types (e.g. '32' -> 32 for int fields)."""
+    for field, value in list(extracted.items()):
+        if field in INT_FIELDS and not isinstance(value, int):
+            try:
+                extracted[field] = int(float(str(value)))
+            except (ValueError, TypeError):
+                del extracted[field]
+        elif field in FLOAT_FIELDS and not isinstance(value, (int, float)):
+            try:
+                extracted[field] = float(str(value))
+            except (ValueError, TypeError):
+                del extracted[field]
+    return extracted
+
+
+def _fallback_extract(field: str, message: str) -> object:
+    """Deterministic regex-based extraction when LLM fails for a specific field."""
+    msg = message.strip()
+
+    if field in INT_FIELDS:
+        match = re.search(r"\d+", msg)
+        if match:
+            return int(match.group())
+
+    elif field in FLOAT_FIELDS:
+        match = re.search(r"[\d,]+\.?\d*", msg.replace(",", ""))
+        if match:
+            return float(match.group())
+
+    elif field == "emirates_id":
+        match = EMIRATES_ID_PATTERN.search(msg)
+        if match:
+            return match.group()
+
+    elif field in ENUM_FIELDS:
+        for option in ENUM_FIELDS[field]:
+            if option.lower() in msg.lower():
+                return option
+
+    elif field in STRING_FIELDS:
+        cleaned = msg.strip()
+        if cleaned:
+            return cleaned
+
+    return None
+
 
 app = FastAPI(
     title="Social Support Application System",
@@ -153,6 +223,12 @@ async def assess_application(applicant_id: int, db: Session = Depends(get_db)):
         for doc in db.query(Document).filter(Document.applicant_id == applicant_id).all()
     ]
 
+    if not documents:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one document must be uploaded before assessment. Please upload a document first.",
+        )
+
     # Run the agentic workflow
     result = run_application_workflow(applicant_data, documents)
 
@@ -232,7 +308,8 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                            "Tier 3" if decision.eligibility_score >= 40 else "Tier 4",
         }
 
-    response = handle_chat_message(request.message, applicant_data, decision_data)
+    chat_history = getattr(request, "chat_history", None)
+    response = handle_chat_message(request.message, applicant_data, decision_data, chat_history)
     return ChatResponse(response=response, agent_used="ChatAgent")
 
 
@@ -265,6 +342,155 @@ async def delete_applicant(applicant_id: int, db: Session = Depends(get_db)):
     db.delete(applicant)
     db.commit()
     return {"message": "Applicant deleted"}
+
+
+@app.post("/api/chat-intake", response_model=ChatIntakeResponse)
+async def chat_intake(request: ChatIntakeRequest):
+    """
+    Conversational intake endpoint for the AI chatbot.
+
+    Extracts structured applicant fields from a free-text user message,
+    identifies which required fields are still missing, and returns the
+    next natural question to ask.
+    """
+    from app.services.llm_service import invoke_llm, extract_json_from_response
+
+    REQUIRED_FIELDS = [
+        "full_name", "emirates_id", "age", "gender", "nationality",
+        "marital_status", "family_size", "dependents",
+        "education_level", "employment_status", "monthly_income",
+        "total_assets", "total_liabilities", "years_of_experience",
+    ]
+
+    # Deterministic questions — LLM must NOT freestyle these
+    FIELD_QUESTIONS = {
+        "full_name":          "Could you please tell me your full name?",
+        "emirates_id":        "What is your Emirates ID number? (format: 784-YYYY-NNNNNNN-N)",
+        "age":                "How old are you?",
+        "gender":             "What is your gender? (Male or Female)",
+        "nationality":        "What is your nationality?",
+        "marital_status":     "What is your marital status? (Single, Married, Divorced, or Widowed)",
+        "family_size":        "How many people are in your household in total (including yourself)?",
+        "dependents":         "How many dependents do you have (children or others you support)?",
+        "education_level":    "What is your highest level of education? (None, Primary, High School, Diploma, Bachelor, Master, or PhD)",
+        "employment_status":  "What is your current employment status? (Employed, Unemployed, Part-Time, or Self-Employed)",
+        "monthly_income":     "What is your monthly income in AED? (Enter 0 if you have no income)",
+        "total_assets":       "What is the total value of your assets in AED? (savings, property, vehicles, etc.)",
+        "total_liabilities":  "What is the total value of your liabilities/debts in AED?",
+        "years_of_experience":"How many years of work experience do you have in total?",
+    }
+
+    collected = request.collected_fields or {}
+    missing = [f for f in REQUIRED_FIELDS if f not in collected or collected[f] in ("", None)]
+
+    if not missing:
+        return ChatIntakeResponse(
+            extracted_fields={},
+            next_question="",
+            is_complete=True,
+            missing_fields=[],
+        )
+
+    collected_str = json.dumps(collected, indent=2) if collected else "None yet"
+
+    prompt = f"""You are extracting structured data from a user's chat message for a UAE social support application.
+
+Already collected fields:
+{collected_str}
+
+Fields still needed (extract ONLY these from the message):
+{missing}
+
+User's message: "{request.message}"
+
+Instructions:
+- Extract as many of the still-needed fields as possible from the message.
+- Do NOT invent or assume values not stated in the message.
+- Return ONLY a JSON object with this exact structure:
+{{
+  "extracted_fields": {{
+    "field_name": value
+  }}
+}}
+
+Field extraction rules:
+- full_name: full name as stated
+- emirates_id: string matching 784-YYYY-NNNNNNN-N pattern
+- age: integer years
+- gender: exactly "Male" or "Female"
+- nationality: country name as stated (e.g. "UAE", "Indian")
+- marital_status: exactly one of "Single", "Married", "Divorced", "Widowed"
+- family_size: integer total household members including applicant
+- dependents: integer count of dependents
+- education_level: exactly one of "None", "Primary", "High School", "Diploma", "Bachelor", "Master", "PhD"
+- employment_status: exactly one of "Employed", "Unemployed", "Part-Time", "Self-Employed"
+- monthly_income: float AED amount (use 0 if person says unemployed with no income)
+- total_assets: float AED value of all assets
+- total_liabilities: float AED value of all debts
+- years_of_experience: float years of work experience
+
+Return ONLY valid JSON. Do NOT include next_question or any other keys."""
+
+    try:
+        response = invoke_llm(prompt, name="chat_intake")
+        parsed = extract_json_from_response(response)
+    except Exception as exc:
+        logger.warning("LLM extraction failed: %s", exc)
+        parsed = {}
+
+    extracted = parsed.get("extracted_fields", {})
+    if not extracted:
+        logger.warning("LLM returned no extracted_fields for message: %r", request.message)
+
+    # Coerce string values to correct types (e.g. "32" -> 32 for age)
+    extracted = _coerce_field_types(extracted)
+
+    # Merge LLM-extracted fields with already-collected fields
+    merged = {**collected, **extracted}
+    still_missing = [f for f in REQUIRED_FIELDS if f not in merged or merged[f] in ("", None)]
+
+    # Deterministic fallback: if LLM failed to extract fields that were asked,
+    # try regex-based extraction from the raw user message
+    # Determine which field was being asked (the first missing field before LLM call)
+    current_field = missing[0] if missing else None
+
+    if still_missing and current_field and current_field in still_missing:
+        # Only attempt fallback for the field that was actively being asked
+        fallback_value = _fallback_extract(current_field, request.message)
+        if fallback_value is not None:
+            logger.info("Fallback extracted %s=%r from message", current_field, fallback_value)
+            extracted[current_field] = fallback_value
+            merged[current_field] = fallback_value
+
+            # Recompute missing after fallback
+            still_missing = [f for f in REQUIRED_FIELDS if f not in merged or merged[f] in ("", None)]
+
+    is_complete = len(still_missing) == 0
+
+    # Generate next_question deterministically — never rely on LLM for this
+    if is_complete:
+        next_q = ""
+    else:
+        next_field = still_missing[0]
+        next_q = FIELD_QUESTIONS[next_field]
+
+    return ChatIntakeResponse(
+        extracted_fields=extracted,
+        next_question=next_q,
+        is_complete=is_complete,
+        missing_fields=still_missing,
+    )
+
+
+@app.post("/api/reassess/{applicant_id}")
+async def reassess_application(applicant_id: int, db: Session = Depends(get_db)):
+    """Delete existing decision and re-run assessment (for demo purposes)."""
+    applicant = db.query(Applicant).filter(Applicant.id == applicant_id).first()
+    if not applicant:
+        raise HTTPException(status_code=404, detail="Applicant not found")
+    db.query(Decision).filter(Decision.applicant_id == applicant_id).delete()
+    db.commit()
+    return {"message": "Decision cleared. Call /api/assess/{id} to re-assess."}
 
 
 @app.get("/api/health")

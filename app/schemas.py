@@ -47,8 +47,22 @@ class DecisionResponse(BaseModel):
 class ChatRequest(BaseModel):
     applicant_id: int
     message: str
+    chat_history: Optional[list] = None
 
 
 class ChatResponse(BaseModel):
     response: str
     agent_used: Optional[str] = None
+
+
+class ChatIntakeRequest(BaseModel):
+    message: str
+    collected_fields: Optional[dict] = None
+    conversation_history: Optional[list] = None
+
+
+class ChatIntakeResponse(BaseModel):
+    extracted_fields: dict
+    next_question: str
+    is_complete: bool
+    missing_fields: list

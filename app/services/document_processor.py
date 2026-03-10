@@ -1,20 +1,92 @@
-import json
-import pandas as pd
-from pathlib import Path
-from app.services.llm_service import invoke_llm, extract_json_from_response
+"""
+Document Processor Service — Multimodal extraction for all document types.
 
+Supported input formats:
+  Bank Statement      : CSV, XLSX, PDF
+  Emirates ID         : TXT, PNG, JPG, JPEG, PDF
+  Resume / CV         : TXT, PDF
+  Assets & Liabilities: XLSX, CSV, PDF, TXT
+  Credit Report       : TXT, PDF
+
+Processing pipeline:
+  Tabular  (CSV/XLSX) → pandas → LLM structuring
+  Text     (TXT)      → raw read → LLM structuring
+  PDF                 → pdfplumber text extraction → LLM structuring
+  Image    (PNG/JPG)  → llava vision OCR (primary) / pytesseract (fallback)
+"""
+import json
+import logging
+from pathlib import Path
+
+import pandas as pd
+
+from app.services.llm_service import invoke_llm, invoke_llm_with_image, extract_json_from_response
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# PDF helper (pdfplumber — primary PDF extraction)
+# ---------------------------------------------------------------------------
+
+def _extract_text_from_pdf(file_path: str, max_chars: int = 4000) -> str:
+    """Extract plain text from a PDF using pdfplumber."""
+    try:
+        import pdfplumber
+        text_parts = []
+        with pdfplumber.open(file_path) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_parts.append(page_text)
+                if sum(len(t) for t in text_parts) > max_chars:
+                    break
+        return "\n".join(text_parts)[:max_chars]
+    except Exception as exc:
+        logger.warning("pdfplumber failed for %s: %s — trying pymupdf", file_path, exc)
+
+    # Fallback: pymupdf (fitz)
+    try:
+        import fitz  # pymupdf
+        doc = fitz.open(file_path)
+        text = ""
+        for page in doc:
+            text += page.get_text()
+            if len(text) > max_chars:
+                break
+        return text[:max_chars]
+    except Exception as exc2:
+        logger.warning("pymupdf also failed for %s: %s", file_path, exc2)
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Bank Statement
+# ---------------------------------------------------------------------------
 
 def extract_bank_statement(file_path: str) -> dict:
-    """Extract financial data from a bank statement (CSV/Excel)."""
+    """Extract financial data from a bank statement (CSV, XLSX, PDF)."""
     path = Path(file_path)
-    if path.suffix in [".xlsx", ".xls"]:
+    data_str = ""
+
+    if path.suffix in (".xlsx", ".xls"):
         df = pd.read_excel(file_path)
+        data_str = df.to_string(index=False, max_rows=50)
     elif path.suffix == ".csv":
         df = pd.read_csv(file_path)
+        data_str = df.to_string(index=False, max_rows=50)
+    elif path.suffix == ".pdf":
+        data_str = _extract_text_from_pdf(file_path)
     else:
-        return _extract_bank_statement_via_llm(file_path)
+        try:
+            with open(file_path, "r", errors="ignore") as f:
+                data_str = f.read(3000)
+        except Exception:
+            data_str = ""
 
-    data = df.to_string(index=False, max_rows=50)
+    if not data_str.strip():
+        return {"error": "Could not extract content from bank statement", "estimated_monthly_income": 0}
+
     prompt = f"""Analyze this bank statement data and extract the following in JSON format:
 {{
     "average_monthly_balance": <float>,
@@ -27,52 +99,41 @@ def extract_bank_statement(file_path: str) -> dict:
 }}
 
 Bank statement data:
-{data}
+{data_str}
 
 Return ONLY the JSON, no other text."""
 
-    response = invoke_llm(prompt)
+    response = invoke_llm(prompt, name="bank_statement_extraction")
     return extract_json_from_response(response)
 
 
-def _extract_bank_statement_via_llm(file_path: str) -> dict:
-    with open(file_path, "r", errors="ignore") as f:
-        content = f.read()[:3000]
-    prompt = f"""Extract financial information from this bank statement text as JSON:
-{{
-    "average_monthly_balance": <float>,
-    "total_credits_last_3_months": <float>,
-    "total_debits_last_3_months": <float>,
-    "salary_detected": <bool>,
-    "estimated_monthly_income": <float>,
-    "irregular_large_transactions": <int>,
-    "summary": "<brief summary>"
-}}
-
-Text:
-{content}
-
-Return ONLY the JSON."""
-    response = invoke_llm(prompt)
-    return extract_json_from_response(response)
-
+# ---------------------------------------------------------------------------
+# Emirates ID
+# ---------------------------------------------------------------------------
 
 def extract_emirates_id(file_path: str) -> dict:
-    """Extract data from Emirates ID image or text file."""
+    """Extract data from Emirates ID — image (vision OCR) or text/PDF."""
     path = Path(file_path)
-    if path.suffix in [".png", ".jpg", ".jpeg", ".webp"]:
+
+    if path.suffix in (".png", ".jpg", ".jpeg", ".webp"):
         return _extract_emirates_id_from_image(file_path)
+
+    # Text or PDF
+    if path.suffix == ".pdf":
+        content = _extract_text_from_pdf(file_path, max_chars=2000)
     else:
-        with open(file_path, "r", errors="ignore") as f:
-            content = f.read()[:2000]
-        return _extract_emirates_id_from_text(content)
+        try:
+            with open(file_path, "r", errors="ignore") as f:
+                content = f.read(2000)
+        except Exception:
+            content = ""
+
+    return _extract_emirates_id_from_text(content)
 
 
 def _extract_emirates_id_from_image(file_path: str) -> dict:
-    """Use LLM vision to extract Emirates ID data from image."""
-    try:
-        from app.services.llm_service import invoke_llm_with_image
-        prompt = """Extract all information from this Emirates ID card image as JSON:
+    """Use llava (primary) / pytesseract (fallback) to OCR Emirates ID image."""
+    prompt = """Extract all information from this Emirates ID card image as JSON:
 {
     "id_number": "<string>",
     "full_name": "<string>",
@@ -83,10 +144,8 @@ def _extract_emirates_id_from_image(file_path: str) -> dict:
     "card_number": "<string>"
 }
 Return ONLY the JSON."""
-        response = invoke_llm_with_image(prompt, file_path)
-        return extract_json_from_response(response)
-    except Exception:
-        return {"error": "Vision extraction not available", "id_number": "", "full_name": ""}
+    response = invoke_llm_with_image(prompt, file_path)
+    return extract_json_from_response(response)
 
 
 def _extract_emirates_id_from_text(content: str) -> dict:
@@ -104,14 +163,29 @@ Text:
 {content}
 
 Return ONLY the JSON."""
-    response = invoke_llm(prompt)
+    response = invoke_llm(prompt, name="emirates_id_text_extraction")
     return extract_json_from_response(response)
 
 
+# ---------------------------------------------------------------------------
+# Resume / CV
+# ---------------------------------------------------------------------------
+
 def extract_resume(file_path: str) -> dict:
-    """Extract career information from resume."""
-    with open(file_path, "r", errors="ignore") as f:
-        content = f.read()[:4000]
+    """Extract career information from resume (TXT or PDF)."""
+    path = Path(file_path)
+
+    if path.suffix == ".pdf":
+        content = _extract_text_from_pdf(file_path, max_chars=4000)
+    else:
+        try:
+            with open(file_path, "r", errors="ignore") as f:
+                content = f.read(4000)
+        except Exception:
+            content = ""
+
+    if not content.strip():
+        return {"error": "Could not extract resume content", "years_of_experience": 0}
 
     prompt = f"""Analyze this resume and extract the following as JSON:
 {{
@@ -129,26 +203,36 @@ Resume:
 {content}
 
 Return ONLY the JSON."""
-    response = invoke_llm(prompt)
+    response = invoke_llm(prompt, name="resume_extraction")
     return extract_json_from_response(response)
 
 
+# ---------------------------------------------------------------------------
+# Assets & Liabilities
+# ---------------------------------------------------------------------------
+
 def extract_assets_liabilities(file_path: str) -> dict:
-    """Extract asset and liability data from Excel file."""
+    """Extract asset and liability data from Excel, CSV, PDF, or TXT."""
     path = Path(file_path)
-    if path.suffix in [".xlsx", ".xls"]:
+    data_str = ""
+
+    if path.suffix in (".xlsx", ".xls"):
         df = pd.read_excel(file_path)
+        data_str = df.to_string(index=False)
     elif path.suffix == ".csv":
         df = pd.read_csv(file_path)
+        data_str = df.to_string(index=False)
+    elif path.suffix == ".pdf":
+        data_str = _extract_text_from_pdf(file_path, max_chars=3000)
     else:
-        with open(file_path, "r", errors="ignore") as f:
-            content = f.read()[:3000]
-        df = None
+        try:
+            with open(file_path, "r", errors="ignore") as f:
+                data_str = f.read(3000)
+        except Exception:
+            data_str = ""
 
-    if df is not None:
-        data = df.to_string(index=False)
-    else:
-        data = content
+    if not data_str.strip():
+        return {"error": "Could not extract assets/liabilities content", "total_assets": 0, "total_liabilities": 0}
 
     prompt = f"""Analyze this assets and liabilities statement and extract as JSON:
 {{
@@ -162,17 +246,32 @@ def extract_assets_liabilities(file_path: str) -> dict:
 }}
 
 Data:
-{data}
+{data_str}
 
 Return ONLY the JSON."""
-    response = invoke_llm(prompt)
+    response = invoke_llm(prompt, name="assets_liabilities_extraction")
     return extract_json_from_response(response)
 
 
+# ---------------------------------------------------------------------------
+# Credit Report
+# ---------------------------------------------------------------------------
+
 def extract_credit_report(file_path: str) -> dict:
-    """Extract credit information from credit report."""
-    with open(file_path, "r", errors="ignore") as f:
-        content = f.read()[:4000]
+    """Extract credit information from credit report (TXT or PDF)."""
+    path = Path(file_path)
+
+    if path.suffix == ".pdf":
+        content = _extract_text_from_pdf(file_path, max_chars=4000)
+    else:
+        try:
+            with open(file_path, "r", errors="ignore") as f:
+                content = f.read(4000)
+        except Exception:
+            content = ""
+
+    if not content.strip():
+        return {"error": "Could not extract credit report content", "credit_score": 0}
 
     prompt = f"""Analyze this credit report and extract as JSON:
 {{
@@ -190,9 +289,13 @@ Credit Report:
 {content}
 
 Return ONLY the JSON."""
-    response = invoke_llm(prompt)
+    response = invoke_llm(prompt, name="credit_report_extraction")
     return extract_json_from_response(response)
 
+
+# ---------------------------------------------------------------------------
+# Dispatcher
+# ---------------------------------------------------------------------------
 
 EXTRACTORS = {
     "bank_statement": extract_bank_statement,
@@ -204,7 +307,7 @@ EXTRACTORS = {
 
 
 def process_document(doc_type: str, file_path: str) -> dict:
-    """Process a document based on its type."""
+    """Process a document based on its type. Supports multimodal input."""
     extractor = EXTRACTORS.get(doc_type)
     if not extractor:
         return {"error": f"Unknown document type: {doc_type}"}

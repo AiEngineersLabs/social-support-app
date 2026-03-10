@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     LANGFUSE_SECRET_KEY: str = ""
     LANGFUSE_HOST: str = "http://localhost:3000"
 
+    # Vision model (for Emirates ID image OCR and multimodal processing)
+    VISION_MODEL: str = "llava:7b"
+
     # App
     UPLOAD_DIR: str = str(BASE_DIR / "data" / "uploads")
     POLICY_DIR: str = str(BASE_DIR / "data" / "policies")
