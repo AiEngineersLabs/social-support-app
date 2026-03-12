@@ -53,6 +53,66 @@ DOC_TYPES = {
     "credit_report":    ("Credit Report",        "PDF or TXT"),
 }
 
+# Keys to display per document type after OCR extraction
+DOC_DISPLAY_KEYS = {
+    "bank_statement": [
+        ("estimated_monthly_income", "Estimated Monthly Income", "AED {:,.0f}"),
+        ("average_monthly_balance", "Average Monthly Balance", "AED {:,.0f}"),
+        ("salary_detected", "Salary Detected", "{}"),
+        ("summary", "Summary", "{}"),
+    ],
+    "emirates_id": [
+        ("full_name", "Full Name", "{}"),
+        ("id_number", "ID Number", "{}"),
+        ("nationality", "Nationality", "{}"),
+        ("gender", "Gender", "{}"),
+        ("date_of_birth", "Date of Birth", "{}"),
+    ],
+    "resume": [
+        ("years_of_experience", "Years of Experience", "{}"),
+        ("highest_education", "Highest Education", "{}"),
+        ("skills", "Skills", "{}"),
+        ("summary", "Summary", "{}"),
+    ],
+    "assets_liabilities": [
+        ("total_assets", "Total Assets", "AED {:,.0f}"),
+        ("total_liabilities", "Total Liabilities", "AED {:,.0f}"),
+        ("net_worth", "Net Worth", "AED {:,.0f}"),
+        ("summary", "Summary", "{}"),
+    ],
+    "credit_report": [
+        ("credit_score", "Credit Score", "{}"),
+        ("outstanding_debt", "Outstanding Debt", "AED {:,.0f}"),
+        ("payment_history", "Payment History", "{}"),
+        ("summary", "Summary", "{}"),
+    ],
+}
+
+
+def _format_extracted_data(doc_type: str, data: dict) -> str:
+    """Format extracted document data into a readable summary for the chat."""
+    if not data or "error" in data:
+        return "Document uploaded but could not extract details automatically."
+
+    display_keys = DOC_DISPLAY_KEYS.get(doc_type, [])
+    lines = []
+    for key, label, fmt in display_keys:
+        value = data.get(key)
+        if value is not None and value != "" and value != 0:
+            try:
+                if isinstance(value, list):
+                    formatted = ", ".join(str(v) for v in value[:5])
+                else:
+                    formatted = fmt.format(value)
+                lines.append(f"  - **{label}:** {formatted}")
+            except (ValueError, TypeError):
+                lines.append(f"  - **{label}:** {value}")
+
+    if not lines:
+        return "Document uploaded. Details will be analyzed during assessment."
+
+    return "\n".join(lines)
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Social Support AI Assistant",
@@ -259,8 +319,10 @@ def handle_intake_message(user_msg: str) -> str:
             st.session_state.collected[k] = v
 
     if result.get("is_complete"):
-        set_phase(PHASE_CONFIRM)
-        return _build_confirm_message()
+        # Show summary and auto-submit (skip manual "Yes" confirmation)
+        summary = _build_confirm_message()
+        submit_result = _submit_application()
+        return summary + "\n\n" + submit_result
 
     return result.get("next_question", "Could you please share more details?")
 
@@ -276,7 +338,7 @@ def _build_confirm_message() -> str:
             val = f"AED {float(val):,.0f}"
         lines.append(f"**{label}:** {val}")
     lines.append("---")
-    lines.append("\nIs all of this correct? Reply **Yes** to submit your application, or tell me what needs to be corrected.")
+    lines.append("\nSubmitting your application automatically...")
     return "\n".join(lines)
 
 
@@ -393,7 +455,7 @@ def render_upload_panel():
     with cols[2]:
         st.markdown("<br>", unsafe_allow_html=True)
         if uploaded_file and st.button("Upload", key=f"btn_{selected_key}", type="primary", use_container_width=True):
-            with st.spinner(f"Uploading {selected_label}..."):
+            with st.spinner(f"Uploading & processing {selected_label}..."):
                 result = api(
                     "post",
                     f"/upload-document/{st.session_state.applicant_id}",
@@ -404,7 +466,9 @@ def render_upload_panel():
                 st.error(result["error"])
             else:
                 st.session_state.docs_uploaded[selected_key] = True
-                add_bot(f"✅ **{selected_label}** uploaded and queued for processing.")
+                extracted = result.get("extracted_data", {})
+                summary = _format_extracted_data(selected_key, extracted)
+                add_bot(f"✅ **{selected_label}** uploaded and processed.\n\n**Extracted Information:**\n{summary}")
                 st.rerun()
 
     # Show upload status
