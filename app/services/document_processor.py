@@ -132,9 +132,14 @@ def extract_emirates_id(file_path: str) -> dict:
 
 
 def _extract_emirates_id_from_image(file_path: str) -> dict:
-    """Use llava (primary) / pytesseract (fallback) to OCR Emirates ID image."""
-    prompt = """Extract all information from this Emirates ID card image as JSON:
-{
+    """Extract Emirates ID data from image using tesseract (primary) + llava (fallback).
+
+    Tesseract is faster and more reliable for ID cards with clear printed text.
+    If tesseract produces usable text, we pass it to the text LLM for structuring.
+    Otherwise, we fall back to llava vision model.
+    """
+    structured_prompt = """Extract all information from this Emirates ID card as JSON:
+{{
     "id_number": "<string>",
     "full_name": "<string>",
     "nationality": "<string>",
@@ -142,10 +147,38 @@ def _extract_emirates_id_from_image(file_path: str) -> dict:
     "gender": "<string>",
     "expiry_date": "<string>",
     "card_number": "<string>"
-}
+}}
 Return ONLY the JSON."""
-    response = invoke_llm_with_image(prompt, file_path)
-    return extract_json_from_response(response)
+
+    # Strategy 1: Tesseract OCR → text LLM (fast, reliable for printed text)
+    try:
+        import pytesseract
+        from PIL import Image as PILImage
+        img = PILImage.open(file_path)
+        ocr_text = pytesseract.image_to_string(img)
+        if ocr_text and len(ocr_text.strip()) > 10:
+            logger.info("Tesseract extracted %d chars from Emirates ID image", len(ocr_text.strip()))
+            text_prompt = (
+                f"{structured_prompt}\n\nOCR text from the card:\n{ocr_text[:2000]}\n\n"
+                "Extract the requested fields from the OCR text above and return ONLY JSON."
+            )
+            response = invoke_llm(text_prompt, name="emirates_id_tesseract_ocr")
+            result = extract_json_from_response(response)
+            if result and not result.get("error"):
+                return result
+    except Exception as tess_err:
+        logger.warning("Tesseract OCR failed for Emirates ID: %s", tess_err)
+
+    # Strategy 2: llava vision model (handles poor quality / non-standard layouts)
+    try:
+        response = invoke_llm_with_image(structured_prompt, file_path)
+        result = extract_json_from_response(response)
+        if result and not result.get("error"):
+            return result
+    except Exception as llava_err:
+        logger.warning("llava vision OCR failed for Emirates ID: %s", llava_err)
+
+    return {"error": "Could not extract Emirates ID details from image"}
 
 
 def _extract_emirates_id_from_text(content: str) -> dict:

@@ -19,6 +19,7 @@ from app.schemas import (
     ChatRequest, ChatResponse, ChatIntakeRequest, ChatIntakeResponse,
 )
 from app.agents.orchestrator import run_application_workflow, handle_chat_message
+from app.services.document_processor import process_document
 from app.services.ml_classifier import train_model, load_model
 from app.services.vector_store import ingest_policy_documents, init_vector_store
 from app.utils.synthetic_data import generate_training_data
@@ -37,7 +38,9 @@ ENUM_FIELDS = {
     "employment_status": ["Employed", "Unemployed", "Part-Time", "Self-Employed"],
 }
 STRING_FIELDS = {"full_name", "nationality"}
-EMIRATES_ID_PATTERN = re.compile(r"784-\d{4}-\d{7}-\d")
+# Matches both 784-YYYY-NNNNNNN-N (with dashes) and 784YYYYNNNNNNN (15 digits, no dashes)
+EMIRATES_ID_DASHED = re.compile(r"784-\d{4}-\d{7}-\d")
+EMIRATES_ID_PLAIN = re.compile(r"784\d{12}")
 
 
 def _coerce_field_types(extracted: dict) -> dict:
@@ -71,9 +74,15 @@ def _fallback_extract(field: str, message: str) -> object:
             return float(match.group())
 
     elif field == "emirates_id":
-        match = EMIRATES_ID_PATTERN.search(msg)
+        # Try dashed format first (784-YYYY-NNNNNNN-N)
+        match = EMIRATES_ID_DASHED.search(msg)
         if match:
             return match.group()
+        # Try plain digits (784YYYYNNNNNNN) and normalize to dashed format
+        match = EMIRATES_ID_PLAIN.search(msg)
+        if match:
+            digits = match.group()
+            return f"{digits[:3]}-{digits[3:7]}-{digits[7:14]}-{digits[14]}"
 
     elif field in ENUM_FIELDS:
         for option in ENUM_FIELDS[field]:
@@ -184,7 +193,14 @@ async def upload_document(
     db.add(db_doc)
     db.commit()
 
-    return {"message": "Document uploaded", "doc_id": db_doc.id, "doc_type": doc_type}
+    # Run OCR/processing immediately and return extracted data
+    try:
+        extracted_data = process_document(doc_type, str(file_path))
+    except Exception as exc:
+        logger.warning("Document processing failed for %s: %s", doc_type, exc)
+        extracted_data = {}
+
+    return {"message": "Document uploaded", "doc_id": db_doc.id, "doc_type": doc_type, "extracted_data": extracted_data}
 
 
 @app.post("/api/assess/{applicant_id}")
